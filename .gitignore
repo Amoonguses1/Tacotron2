@@ -1,4 +1,8 @@
 download/
 data/
-dump_orgdir/
+dump/
+dev/
+eval/
 train/
+outputs/
+__pycache__/

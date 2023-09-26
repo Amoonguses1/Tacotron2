@@ -1,5 +1,3 @@
-from text_to_seq import text_to_sequense
-
 import argparse
 import sys
 from concurrent.futures import ProcessPoolExecutor
@@ -39,18 +37,14 @@ def preprocess(
     # input
     with open(text_file) as f:
         data = f.read()
-    in_feats = text_to_sequense(data)
+    in_feats = text_to_sequence(data)
 
     # log mel
-    sr, x = wavfile.read(wav_file)
+    read_sr, x = wavfile.read(wav_file)
     if x.dtype in [np.int16, np.int32]:
             x = (x / np.iinfo(x.dtype).max).astype(np.float64)
-    # stft
-    stft_data = librosa.stft(x.astype(np.float32), n_fft=2048, hop_length=240)
-    # mel-spec
-    n_mels = 256
-    melfb = librosa.filters.mel(sr=sr, n_fft=2048, n_mels=80)
-    out_feats = librosa.amplitude_to_db(np.dot(melfb, np.abs(stft_data)), ref=np.max)
+    x = librosa.resample(x, orig_sr=read_sr, target_sr=sr)
+    out_feats = logmelspectrogram(x, sr)
 
     # wav
     x = mulaw_quantize(x, mu)
@@ -69,8 +63,65 @@ def preprocess(
         allow_pickle=False,
     )
 
+def next_power_of_2(x):
+    return 1 if x == 0 else 2 ** (x - 1).bit_length()
 
+def logmelspectrogram(
+    y,
+    sr,
+    n_fft=None,
+    hop_length=None,
+    win_length=None,
+    n_mels=80,
+    fmin=None,
+    fmax=None,
+    clip=0.001,
+):
+    """Compute log-melspectrogram.
 
+    Args:
+        y (ndarray): Waveform.
+        sr (int): Sampling rate.
+        n_fft (int, optional): FFT size.
+        hop_length (int, optional): Hop length. Defaults to 12.5ms.
+        win_length (int, optional): Window length. Defaults to 50 ms.
+        n_mels (int, optional): Number of mel bins. Defaults to 80.
+        fmin (int, optional): Minimum frequency. Defaults to 0.
+        fmax (int, optional): Maximum frequency. Defaults to sr / 2.
+        clip (float, optional): Clip the magnitude. Defaults to 0.001.
+
+    Returns:
+        numpy.ndarray: Log-melspectrogram.
+    """
+    if hop_length is None:
+        hop_length = int(sr * 0.0125)
+    if win_length is None:
+        win_length = int(sr * 0.050)
+    if n_fft is None:
+        n_fft = next_power_of_2(win_length)
+
+    S = librosa.stft(
+        y, n_fft=n_fft, hop_length=hop_length, win_length=win_length, window="hann"
+    )
+
+    fmin = 0 if fmin is None else fmin
+    fmax = sr // 2 if fmax is None else fmax
+
+    # メルフィルタバンク
+    mel_basis = librosa.filters.mel(
+        sr=sr, n_fft=n_fft, fmin=fmin, fmax=fmax, n_mels=n_mels
+    )
+    # スペクトログラム -> メルスペクトログラム
+    S = np.dot(mel_basis, np.abs(S))
+
+    # クリッピング
+    S = np.maximum(S, clip)
+
+    # 対数を取る
+    S = np.log10(S)
+
+    # Time first: (T, N)
+    return S.T
 
 if __name__ == "__main__":
     args = get_parser().parse_args(sys.argv[1:])

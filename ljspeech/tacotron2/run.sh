@@ -26,7 +26,7 @@ stage=0
 stop_stage=0
 
 . $COMMON_ROOT/parse_options.sh || exit 1;
-
+spk=ljspeech
 dumpdir=dump
 dump_org_dir=$dumpdir/${spk}_sr${sample_rate}/org
 dump_norm_dir=$dumpdir/${spk}_sr${sample_rate}/norm
@@ -65,46 +65,46 @@ fi
 
 if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     echo "stage 1: Feature generation for duration model"
-    if [ ! -e dump_orgdir ]; then
-        mkdir dump_orgdir
+    if [ ! -e $dump_org_dir ]; then
+        mkdir -p $dump_org_dir
     fi
     for s in ${datasets[@]}; do
         if [ ! -e $s ]; then
             mkdir $s
         fi
         xrun python preprocess.py data/$s.list download/LJSpeech-1.1/wavs download/LJSpeech-1.1/txt \
-            dump_orgdir/$s --n_jobs ${n_jobs}
+            $dump_org_dir/$s --n_jobs ${n_jobs}
     done
 fi
 
-# if [ ${stage} -le 100 ] && [ ${stop_stage} -ge -100 ]; then
-#     echo "stage 2: feature normalization"
-#     for typ in "tacotron"; do
-#        for inout in "out"; do
-#             xrun python $COMMON_ROOT/fit_scaler.py data/train.list \
-#                 $dump_org_dir/$train_set/${inout}_${typ} \
-#                 $dump_org_dir/${inout}_${typ}_scaler.joblib
-#         done
-#     done
+if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
+    echo "stage 2: feature normalization"
+    for typ in "tacotron"; do
+       for inout in "out"; do
+            xrun python $COMMON_ROOT/fit_scaler.py data/train.list \
+                $dump_org_dir/$train_set/${inout}_${typ} \
+                $dump_org_dir/${inout}_${typ}_scaler.joblib
+        done
+    done
 
-#     mkdir -p $dump_norm_dir
-#     cp -v $dump_org_dir/*.joblib $dump_norm_dir/
+    mkdir -p $dump_norm_dir
+    cp -v $dump_org_dir/*.joblib $dump_norm_dir/
 
-#     for s in ${datasets[@]}; do
-#         for typ in "tacotron"; do
-#             for inout in "out" "in"; do
-#                 if [ $inout == "in" ]; then
-#                     cp -r $dump_org_dir/$s/${inout}_${typ} $dump_norm_dir/$s/
-#                     continue
-#                 fi
-#                 xrun python $COMMON_ROOT/preprocess_normalize.py data/$s.list \
-#                     $dump_org_dir/${inout}_${typ}_scaler.joblib \
-#                     $dump_org_dir/$s/${inout}_${typ}/ \
-#                     $dump_norm_dir/$s/${inout}_${typ}/ --n_jobs $n_jobs
-#             done
-#         done
-#     done
-# fi
+    for s in ${datasets[@]}; do
+        for typ in "tacotron"; do
+            for inout in "out" "in"; do
+                if [ $inout == "in" ]; then
+                    cp -r $dump_org_dir/$s/${inout}_${typ} $dump_norm_dir/$s/
+                    continue
+                fi
+                xrun python $COMMON_ROOT/preprocess_normalize.py data/$s.list \
+                    $dump_org_dir/${inout}_${typ}_scaler.joblib \
+                    $dump_org_dir/$s/${inout}_${typ}/ \
+                    $dump_norm_dir/$s/${inout}_${typ}/ --n_jobs $n_jobs
+            done
+        done
+    done
+fi
 
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     echo "stage 3: Training Tacotron"
