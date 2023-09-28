@@ -108,7 +108,6 @@ fi
 
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     echo "stage 3: Training Tacotron"
-    export HYDRA_FULL_ERROR=1
     xrun python train_tacotron.py model=$acoustic_model tqdm=$tqdm \
         data.train.utt_list=data/train.list \
         data.train.in_dir=$dump_norm_dir/$train_set/in_tacotron/ \

@@ -1,5 +1,5 @@
 # General settings.
-spk: "jsut"
+spk: "ljspeech"
 
 # exp tag(for managing experiments)
 tag:
@@ -48,7 +48,7 @@ tacotron_train_max_train_steps: 100000
 # バッチサイズ16の場合に6GB程度、バッチサイズ32の場合に12GB程度
 # 必要なGPUメモリはミニバッチ内の発話の最大系列長に依存するため、
 # 余裕を持ってより多くのGPUメモリを確保しておくことを推奨します
-tacotron_data_batch_size: 32
+tacotron_data_batch_size: 16
 
 ### WaveNet ###
 # 注意: 50万ステップの学習には数日時間がかかることが予想されます

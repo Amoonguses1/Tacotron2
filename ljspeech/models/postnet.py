@@ -2,9 +2,19 @@ from torch import nn
 
 
 class Postnet(nn.Module):
+    """Post-Net of Tacotron 2
+
+    Args:
+        in_dim (int): dimension of input
+        layers (int): number of layers
+        channels (int): number of channels
+        kernel_size (int): kernel size
+        dropout (float): dropout rate
+    """
+
     def __init__(
         self,
-        in_dim=80,
+        in_dim,
         layers=5,
         channels=512,
         kernel_size=5,
@@ -32,4 +42,12 @@ class Postnet(nn.Module):
         self.postnet = nn.Sequential(*postnet)
 
     def forward(self, xs):
+        """Forward step
+
+        Args:
+            xs (torch.Tensor): input sequence
+
+        Returns:
+            torch.Tensor: output sequence
+        """
         return self.postnet(xs)

@@ -1,12 +1,57 @@
-from torch import nn
-from torch.nn import functional as F
+# Acknowledgement: some of the code was adapted from ESPnet
+#  Copyright 2019 Nagoya University (Tomoki Hayashi)
+#  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
+
+
 import torch
-from simple_encoder import get_dummy_input
-from ttslearn.tacotron.decoder import ZoneOutCell
-from attention import LocationSensitiveAttention
+import torch.nn.functional as F
+from torch import nn
+from ljspeech.models.attention import LocationSensitiveAttention
 from ttslearn.util import make_pad_mask
 
+
+def decoder_init(m):
+    if isinstance(m, nn.Conv1d):
+        nn.init.xavier_uniform_(m.weight, nn.init.calculate_gain("tanh"))
+
+
+class ZoneOutCell(nn.Module):
+    def __init__(self, cell, zoneout=0.1):
+        super().__init__()
+        self.cell = cell
+        self.hidden_size = cell.hidden_size
+        self.zoneout = zoneout
+
+    def forward(self, inputs, hidden):
+        next_hidden = self.cell(inputs, hidden)
+        next_hidden = self._zoneout(hidden, next_hidden, self.zoneout)
+        return next_hidden
+
+    def _zoneout(self, h, next_h, prob):
+        h_0, c_0 = h
+        h_1, c_1 = next_h
+        h_1 = self._apply_zoneout(h_0, h_1, prob)
+        c_1 = self._apply_zoneout(c_0, c_1, prob)
+        return h_1, c_1
+
+    def _apply_zoneout(self, h, next_h, prob):
+        if self.training:
+            mask = h.new(*h.size()).bernoulli_(prob)
+            return mask * h + (1 - mask) * next_h
+        else:
+            return prob * h + (1 - prob) * next_h
+
+
 class Prenet(nn.Module):
+    """Pre-Net of Tacotron/Tacotron 2.
+
+    Args:
+        in_dim (int) : dimension of input
+        layers (int) : number of pre-net layers
+        hidden_dim (int) : dimension of hidden layer
+        dropout (float) : dropout rate
+    """
+
     def __init__(self, in_dim, layers=2, hidden_dim=256, dropout=0.5):
         super().__init__()
         self.dropout = dropout
@@ -19,27 +64,52 @@ class Prenet(nn.Module):
         self.prenet = nn.Sequential(*prenet)
 
     def forward(self, x):
+        """Forward step
+
+        Args:
+            x (torch.Tensor) : input tensor
+
+        Returns:
+            torch.Tensor : output tensor
+        """
         for layer in self.prenet:
-            # 学習時、推論時の両方で Dropout を適用します
+            # 学習時、推論時の両方で Dropout を適用します」
             x = F.dropout(layer(x), self.dropout, training=True)
         return x
 
 
 class Decoder(nn.Module):
+    """Decoder of Tacotron 2.
+
+    Args:
+        encoder_hidden_dim (int) : dimension of encoder hidden layer
+        out_dim (int) : dimension of output
+        layers (int) : number of LSTM layers
+        hidden_dim (int) : dimension of hidden layer
+        prenet_layers (int) : number of pre-net layers
+        prenet_hidden_dim (int) : dimension of pre-net hidden layer
+        prenet_dropout (float) : dropout rate of pre-net
+        zoneout (float) : zoneout rate
+        reduction_factor (int) : reduction factor
+        attention_hidden_dim (int) : dimension of attention hidden layer
+        attention_conv_channel (int) : number of attention convolution channels
+        attention_conv_kernel_size (int) : kernel size of attention convolution
+    """
+
     def __init__(
         self,
-        encoder_hidden_dim=512,
-        out_dim=80,
-        layers=2,
-        hidden_dim=1024,
-        prenet_layers=2,
-        prenet_hidden_dim=256,
-        prenet_dropout=0.5,
-        zoneout=0.1,
-        reduction_factor=1,
-        attention_hidden_dim=128,
-        attention_conv_channels=32,
-        attention_conv_kernel_size=31,
+        encoder_hidden_dim=512,  # エンコーダの隠れ層の次元数
+        out_dim=80,  # 出力の次元数
+        layers=2,  # LSTM 層の数
+        hidden_dim=1024,  # LSTM層の次元数
+        prenet_layers=2,  # Pre-Net の層の数
+        prenet_hidden_dim=256,  # Pre-Net の隠れ層の次元数
+        prenet_dropout=0.5,  # Pre-Net の Dropout 率
+        zoneout=0.1,  # Zoneout 率
+        reduction_factor=1,  # Reduction factor
+        attention_hidden_dim=128,  # アテンション層の次元数
+        attention_conv_channels=32,  # アテンションの畳み込みのチャネル数
+        attention_conv_kernel_size=31,  # アテンションの畳み込みのカーネルサイズ
     ):
         super().__init__()
         self.out_dim = out_dim
@@ -54,29 +124,40 @@ class Decoder(nn.Module):
         )
         self.reduction_factor = reduction_factor
 
-        # Prenet
+        # Pre-Net
         self.prenet = Prenet(out_dim, prenet_layers, prenet_hidden_dim, prenet_dropout)
 
-        # 片方向LSTM
+        # 片方向 LSTM
         self.lstm = nn.ModuleList()
         for layer in range(layers):
             lstm = nn.LSTMCell(
                 encoder_hidden_dim + prenet_hidden_dim if layer == 0 else hidden_dim,
                 hidden_dim,
             )
-            lstm = ZoneOutCell(lstm, zoneout)
-            self.lstm += [lstm]
+            self.lstm += [ZoneOutCell(lstm, zoneout)]
 
         # 出力への projection 層
         proj_in_dim = encoder_hidden_dim + hidden_dim
         self.feat_out = nn.Linear(proj_in_dim, out_dim * reduction_factor, bias=False)
         self.prob_out = nn.Linear(proj_in_dim, reduction_factor)
 
+        self.apply(decoder_init)
+
     def _zero_state(self, hs):
         init_hs = hs.new_zeros(hs.size(0), self.lstm[0].hidden_size)
         return init_hs
 
     def forward(self, encoder_outs, in_lens, decoder_targets=None):
+        """Forward step
+
+        Args:
+            encoder_outs (torch.Tensor) : encoder outputs
+            in_lens (torch.Tensor) : input lengths
+            decoder_targets (torch.Tensor) : decoder targets for teacher-forcing.
+
+        Returns:
+            tuple: tuple of outputs, stop token prediction, and attention weights
+        """
         is_inference = decoder_targets is None
 
         # Reduction factor に基づくフレーム数の調整
@@ -106,8 +187,9 @@ class Decoder(nn.Module):
         go_frame = encoder_outs.new_zeros(encoder_outs.size(0), self.out_dim)
         prev_out = go_frame
 
-        # 1つ前の時刻のアテンション重み
+        # 1 つ前の時刻のアテンション重み
         prev_att_w = None
+        self.attention.reset()
 
         # メインループ
         outs, logits, att_ws = [], [], []
@@ -160,20 +242,3 @@ class Decoder(nn.Module):
             outs = outs.view(outs.size(0), self.out_dim, -1)  # (B, out_dim, Lmax)
 
         return outs, logits, att_ws
-
-
-def demo_prenet():
-    Prenet(80)
-    seqs, in_lens = get_dummy_input()
-    in_lens, indices = torch.sort(in_lens, dim=0, descending=True)
-    seqs = seqs[indices]
-    decoder_input = torch.ones(len(seqs), 80)
-
-    prenet = Prenet(80)
-    out = prenet(decoder_input)
-    print(f"デコーダの入力のサイズ: {tuple(decoder_input.shape)}")
-    print(f"Pre-Net の出力のサイズ: {tuple(out.shape)}")
-
-
-if __name__ == "__main__":
-    demo_prenet()

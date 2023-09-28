@@ -23,7 +23,8 @@ from ttslearn.util import make_non_pad_mask
 
 
 logger: Logger = None
-
+import os
+os.environ["TORCH_USE_CUDA_DSA"] = "1"
 
 @torch.no_grad()
 def eval_model(

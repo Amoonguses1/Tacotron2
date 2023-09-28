@@ -1,79 +1,80 @@
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-from simple_encoder import get_dummy_input
-import torch
 
 
-class ConvEncoder(nn.Module):
+def encoder_init(m):
+    if isinstance(m, nn.Conv1d):
+        nn.init.xavier_uniform_(m.weight, nn.init.calculate_gain("relu"))
+
+
+class Encoder(nn.Module):
+    """Encoder of Tacotron 2
+
+    Args:
+        num_vocab (int): number of vocabularies
+        embed_dim (int): dimension of embeddings
+        hidden_dim (int): dimension of hidden units
+        conv_layers (int): number of convolutional layers
+        conv_channels (int): number of convolutional channels
+        conv_kernel_size (int): size of convolutional kernel
+        dropout (float): dropout rate
+    """
+
     def __init__(
         self,
-        num_vocab=52,
-        embed_dim=256,
-        conv_layers=3,
-        conv_channels=256,
-        conv_kernel_size=5
+        num_vocab=51,  # 語彙数
+        embed_dim=512,  # 文字埋め込みの次元数
+        hidden_dim=512,  # 隠れ層の次元数
+        conv_layers=3,  # 畳み込み層数
+        conv_channels=512,  # 畳み込み層のチャネル数
+        conv_kernel_size=5,  # 畳み込み層のカーネルサイズ
+        dropout=0.5,  # Dropout 率
     ):
-        super().__init__()
+        super(Encoder, self).__init__()
+        # 文字の埋め込み表現
         self.embed = nn.Embedding(num_vocab, embed_dim, padding_idx=0)
-        self.convs = nn.ModuleList()
+        # 1 次元畳み込みの重ね合わせ：局所的な時間依存関係のモデル化
+        convs = nn.ModuleList()
         for layer in range(conv_layers):
             in_channels = embed_dim if layer == 0 else conv_channels
-            self.convs.extend([
+            convs += [
                 nn.Conv1d(
                     in_channels,
                     conv_channels,
                     conv_kernel_size,
                     padding=(conv_kernel_size - 1) // 2,
-                    bias=False,
+                    bias=False,  # この bias は不要です
                 ),
                 nn.BatchNorm1d(conv_channels),
                 nn.ReLU(),
-                nn.Dropout(0.5),
-            ])
-            self.convs = nn.Sequential(*self.convs)
-
-    def forward(self, seqs):
-        emb = self.embed(seqs)
-        out = self.convs(emb.transpose(1, 2)).transpose(1, 2)
-        return out
-
-
-class Encoder(ConvEncoder):
-    def __init__(
-            self, num_vocab=52, embed_dim=512, hidden_dim=512, conv_layers=3,
-            conv_channels=512, conv_kernel_size=5):
-        super().__init__(num_vocab, embed_dim, conv_layers,
-                         conv_channels, conv_kernel_size)
-        # 双方向 LSTM による長期依存関係のモデル化
+                nn.Dropout(dropout),
+            ]
+        self.convs = nn.Sequential(*convs)
+        # Bi-LSTM による長期依存関係のモデル化
         self.blstm = nn.LSTM(
-            conv_channels, hidden_dim // 2, 1,
-            batch_first=True, bidirectional=True
+            conv_channels, hidden_dim // 2, 1, batch_first=True, bidirectional=True
         )
 
+        # initialize
+        self.apply(encoder_init)
+
     def forward(self, seqs, in_lens):
+        """Forward step
+
+        Args:
+            seqs (torch.Tensor): input sequences
+            in_lens (torch.Tensor): input sequence lengths
+
+        Returns:
+            torch.Tensor: encoded sequences
+        """
         emb = self.embed(seqs)
-        # 1 次元畳み込みと embedding では、入力のサイズ が異なるので注意
+        # 1 次元畳み込みと embedding では、入力の shape が異なるので注意
         out = self.convs(emb.transpose(1, 2)).transpose(1, 2)
 
-        # 双方向 LSTM の計算
-        out = pack_padded_sequence(out, in_lens, batch_first=True)
+        # Bi-LSTM の計算
+        out = pack_padded_sequence(out, in_lens.to("cpu"), batch_first=True)
         out, _ = self.blstm(out)
         out, _ = pad_packed_sequence(out, batch_first=True)
+
         return out
-
-
-def demo():
-    encoder = Encoder(num_vocab=40, embed_dim=256)
-    seqs, in_lens = get_dummy_input()
-    in_lens, indices = torch.sort(in_lens, dim=0, descending=True)
-    seqs = seqs[indices]
-
-    encoder_outs = encoder(seqs, in_lens)
-
-
-if __name__ == "__main__":
-    print(Encoder())
-    print(ConvEncoder())
-    demo()
-    print(f"入力のサイズ: {tuple(seqs.shape)}")
-    print(f"出力のサイズ: {tuple(encoder_outs.shape)}")

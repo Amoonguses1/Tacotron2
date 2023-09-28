@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from ttslearn.util import pad_1d
-import text_to_seq
+import ljspeech.models.text_to_seq
 
 class SimplestEncoder(nn.Module):
     def __init__(self, num_vocab=40, embed_dim=256):

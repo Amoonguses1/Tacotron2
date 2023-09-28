@@ -6,3 +6,5 @@ eval/
 train/
 outputs/
 __pycache__/
+tensorboard/
+exp/
